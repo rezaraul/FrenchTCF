@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>TCF B2 — Entraînement</title>
+<meta name="description" content="Application d'entraînement au TCF pour atteindre le niveau B2 : vocabulaire, grammaire, lecture, écoute, écriture et expression orale." />
+<meta name="theme-color" content="#0b3d91" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="TCF B2" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <button id="backBtn" class="icon-btn" aria-label="Retour" hidden>←</button>
+  <h1 id="topbarTitle">TCF B2</h1>
+  <div class="streak-badge" id="streakBadge" title="Série de jours actifs">🔥 <span id="streakCount">0</span></div>
+</header>
+
+<main id="app"></main>
+
+<nav class="bottomnav" id="bottomnav">
+  <a href="#/home" data-route="home" class="navitem"><span class="navicon">🏠</span><span>Accueil</span></a>
+  <a href="#/flashcards" data-route="flashcards" class="navitem"><span class="navicon">🗂️</span><span>Cartes</span></a>
+  <a href="#/grammar" data-route="grammar" class="navitem"><span class="navicon">📐</span><span>Grammaire</span></a>
+  <a href="#/skills" data-route="skills" class="navitem"><span class="navicon">🎯</span><span>Épreuves</span></a>
+  <a href="#/progress" data-route="progress" class="navitem"><span class="navicon">📊</span><span>Progrès</span></a>
+</nav>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="data/vocab.js"></script>
+<script src="data/grammar.js"></script>
+<script src="data/reading.js"></script>
+<script src="data/listening.js"></script>
+<script src="data/writing.js"></script>
+<script src="data/speaking.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
