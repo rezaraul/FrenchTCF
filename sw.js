@@ -1,4 +1,4 @@
-const CACHE_NAME = "tcf-b2-cache-v1";
+const CACHE_NAME = "tcf-b2-cache-v7";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const PRECACHE_URLS = [
   "./app.js",
   "./manifest.json",
   "./data/vocab.js",
+  "./data/lessons.js",
   "./data/grammar.js",
   "./data/reading.js",
   "./data/listening.js",

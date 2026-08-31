@@ -44,6 +44,7 @@ function defaultState() {
     listeningScores: {},  // id -> { correct, total, date }
     writingDone: {},      // id -> { date, wordCount }
     speakingDone: {},     // id -> { date }
+    lessonScores: {},     // lesson id -> { correct, total, date } (mini quiz from common errors)
     activityDates: [],    // list of "YYYY-MM-DD"
     lastActive: null,
     streak: 0,
@@ -154,9 +155,10 @@ function parseHash() {
   const parts = h.split("/").filter(Boolean);
   return parts.length ? parts : ["home"];
 }
-const NAV_GROUP = { home: "home", flashcards: "flashcards", grammar: "grammar", skills: "skills", reading: "skills", listening: "skills", writing: "skills", speaking: "skills", progress: "progress" };
+const NAV_GROUP = { home: "home", lessons: "lessons", flashcards: "flashcards", grammar: "grammar", skills: "skills", reading: "skills", listening: "skills", writing: "skills", speaking: "skills", progress: "progress" };
 const BACK_TARGET = {
   "flashcards/study": "#/flashcards",
+  "lessons/detail": "#/lessons",
   "grammar/detail": "#/grammar",
   "reading/list": "#/skills",
   "reading/detail": "#/reading",
@@ -182,6 +184,10 @@ function render() {
 
   switch (route) {
     case "home": title = "TCF B2"; renderHome(); break;
+    case "lessons":
+      if (sub) { title = "Leçon"; backHash = BACK_TARGET["lessons/detail"]; renderLessonDetail(sub); }
+      else { title = "Leçons (A1 → B2)"; renderLessonsList(); }
+      break;
     case "flashcards":
       if (sub === "study") { title = "Session de cartes"; backHash = BACK_TARGET["flashcards/study"]; renderFlashcardStudy(); }
       else { title = "Cartes de vocabulaire"; renderFlashcardsHome(); }
@@ -243,6 +249,7 @@ function renderHome() {
     </div>
     <div class="section-title">Modules d'entraînement</div>
     <div class="tile-grid">
+      ${tile("#/lessons", "📚", "Leçons (A1→B2)", LESSONS_DATA.length + " leçons pas à pas")}
       ${tile("#/flashcards", "🗂️", "Cartes de vocabulaire", VOCAB_DATA.length + " mots · A1→B2")}
       ${tile("#/grammar", "📐", "Grammaire", GRAMMAR_DATA.length + " points clés B2")}
       ${tile("#/reading", "📖", "Compréhension écrite", READING_DATA.length + " textes")}
@@ -260,21 +267,42 @@ function renderHome() {
 
 /* ================= FLASHCARDS ================= */
 const LEVELS = ["A1", "A2", "B1", "B2"];
+VOCAB_DATA.forEach((c) => { c.deck = "core"; });
+const CURRICULUM_VOCAB_DATA = LESSONS_DATA.flatMap((lesson) =>
+  lesson.vocab.map((v) => ({
+    fr: v.fr, en: v.en, fa: v.fa,
+    level: lesson.level, category: lesson.title, lessonId: lesson.id, deck: "lessons",
+  }))
+);
+const DECKS = {
+  core: { label: "Vocabulaire TCF (" + VOCAB_DATA.length + " mots)", data: VOCAB_DATA, levels: ["A1", "A2", "B1", "B2"] },
+  lessons: { label: "Cours particulier (" + LESSONS_DATA.length + " leçons)", data: CURRICULUM_VOCAB_DATA, levels: ["A1", "A2", "B1", "B2"] },
+};
+function srsKey(card) { return card.deck + "::" + card.fr; }
 function isDue(card) {
-  const rec = state.srs[card.fr];
+  const rec = state.srs[srsKey(card)];
   if (!rec) return true;
   return rec.due <= Date.now();
 }
-let flashFilter = JSON.parse(localStorage.getItem("flashFilter") || "[]");
+let flashDeck = localStorage.getItem("flashDeck") || "core";
+let flashFilterByDeck = JSON.parse(localStorage.getItem("flashFilterByDeck") || "{}");
+function currentFilter() { return flashFilterByDeck[flashDeck] || []; }
+function setCurrentFilter(arr) { flashFilterByDeck[flashDeck] = arr; localStorage.setItem("flashFilterByDeck", JSON.stringify(flashFilterByDeck)); }
 
 function renderFlashcardsHome() {
-  const filtered = flashFilter.length ? VOCAB_DATA.filter((c) => flashFilter.includes(c.level)) : VOCAB_DATA;
+  const deckLevels = DECKS[flashDeck].levels;
+  const deckData = DECKS[flashDeck].data;
+  const filter = currentFilter();
+  const filtered = filter.length ? deckData.filter((c) => filter.includes(c.level)) : deckData;
   const due = filtered.filter(isDue).length;
-  const mastered = filtered.filter((c) => (state.srs[c.fr] || {}).box >= 4).length;
+  const mastered = filtered.filter((c) => (state.srs[srsKey(c)] || {}).box >= 4).length;
   setApp(`
+    <div class="chip-row" id="deckChips">
+      ${Object.keys(DECKS).map((k) => `<button type="button" class="chip ${flashDeck === k ? "active" : ""}" data-deck="${k}">${DECKS[k].label}</button>`).join("")}
+    </div>
     <p class="muted">Choisissez un ou plusieurs niveaux, puis lancez une session de révision (méthode Leitner : les cartes difficiles reviennent plus souvent).</p>
     <div class="chip-row" id="levelChips">
-      ${LEVELS.map((l) => `<button type="button" class="chip ${flashFilter.includes(l) ? "active" : ""}" data-lvl="${l}">${l}</button>`).join("")}
+      ${deckLevels.map((l) => `<button type="button" class="chip ${filter.includes(l) ? "active" : ""}" data-lvl="${l}">${l}</button>`).join("")}
     </div>
     <div class="stat-row mb12">
       <div class="stat-box"><div class="num">${filtered.length}</div><div class="lbl">mots sélectionnés</div></div>
@@ -283,32 +311,49 @@ function renderFlashcardsHome() {
     </div>
     <button class="btn" id="startStudyBtn">▶ Commencer la session (max. 15 cartes)</button>
     <div class="section-title">Répartition par niveau</div>
-    ${LEVELS.map((l) => {
-      const words = VOCAB_DATA.filter((c) => c.level === l);
-      const m = words.filter((c) => (state.srs[c.fr] || {}).box >= 4).length;
-      const pct = words.length ? Math.round((m / words.length) * 100) : 0;
-      return `<div class="list-row"><div><span class="pill ${l.toLowerCase()}">${l}</span>${words.length} mots</div><div class="rt">${m} maîtrisés (${pct}%)</div></div>`;
+    ${deckLevels.map((l) => {
+      const words = deckData.filter((c) => c.level === l);
+      const m = words.filter((c) => (state.srs[srsKey(c)] || {}).box >= 4).length;
+      const p = words.length ? Math.round((m / words.length) * 100) : 0;
+      return `<div class="list-row"><div><span class="pill ${l.toLowerCase()}">${l}</span>${words.length} mots</div><div class="rt">${m} maîtrisés (${p}%)</div></div>`;
     }).join("")}
   `);
-  $all("#levelChips .chip").forEach((btn) => {
+  $all("#deckChips .chip").forEach((btn) => {
     btn.onclick = () => {
-      const lvl = btn.dataset.lvl;
-      if (flashFilter.includes(lvl)) flashFilter = flashFilter.filter((x) => x !== lvl);
-      else flashFilter.push(lvl);
-      localStorage.setItem("flashFilter", JSON.stringify(flashFilter));
+      flashDeck = btn.dataset.deck;
+      localStorage.setItem("flashDeck", flashDeck);
       renderFlashcardsHome();
     };
   });
-  $("#startStudyBtn").onclick = () => navigate("#/flashcards/study");
+  $all("#levelChips .chip").forEach((btn) => {
+    btn.onclick = () => {
+      const lvl = btn.dataset.lvl;
+      const f = currentFilter();
+      setCurrentFilter(f.includes(lvl) ? f.filter((x) => x !== lvl) : [...f, lvl]);
+      renderFlashcardsHome();
+    };
+  });
+  $("#startStudyBtn").onclick = () => { studySession = null; navigate("#/flashcards/study"); };
 }
 
 let studySession = null;
 function buildStudySession() {
-  const pool = flashFilter.length ? VOCAB_DATA.filter((c) => flashFilter.includes(c.level)) : VOCAB_DATA;
+  const deckData = DECKS[flashDeck].data;
+  const filter = currentFilter();
+  const pool = filter.length ? deckData.filter((c) => filter.includes(c.level)) : deckData;
   let due = shuffle(pool.filter(isDue));
   let practiceAnyway = false;
   if (due.length === 0) { due = shuffle(pool); practiceAnyway = true; }
   return { cards: due.slice(0, 15), idx: 0, flipped: false, correct: 0, practiceAnyway };
+}
+function startLessonStudy(lessonId) {
+  const lesson = LESSONS_DATA.find((l) => l.id === lessonId);
+  if (!lesson) return;
+  const cards = lesson.vocab.map((v) => ({
+    fr: v.fr, en: v.en, fa: v.fa, level: lesson.level, category: lesson.title, lessonId: lesson.id, deck: "lessons",
+  }));
+  studySession = { cards: shuffle(cards).slice(0, 20), idx: 0, flipped: false, correct: 0, practiceAnyway: false };
+  navigate("#/flashcards/study");
 }
 function renderFlashcardStudy() {
   if (!studySession) studySession = buildStudySession();
@@ -339,12 +384,13 @@ function renderFlashcardStudy() {
         ${studySession.flipped ? `
           <div class="flash-back">
             <div class="en">${escapeHtml(card.en)}</div>
-            <div class="example">${escapeHtml(card.example)}</div>
-            <div class="exampleEn">${escapeHtml(card.exampleEn)}</div>
+            ${card.fa ? `<div class="fa">${escapeHtml(card.fa)}</div>` : ""}
+            ${card.example ? `<div class="example">${escapeHtml(card.example)}</div>` : ""}
+            ${card.exampleEn ? `<div class="exampleEn">${escapeHtml(card.exampleEn)}</div>` : ""}
           </div>` : `
           <div class="flash-front">
             <div class="word">${escapeHtml(card.fr)}</div>
-            <div class="pos">${escapeHtml(card.pos)}</div>
+            ${card.pos ? `<div class="pos">${escapeHtml(card.pos)}</div>` : ""}
           </div>`}
       </div>
     </div>
@@ -375,15 +421,137 @@ function renderFlashcardStudy() {
 }
 const BOX_INTERVAL_DAYS = [0, 1, 3, 7, 16, 30];
 function gradeCard(card, grade) {
-  const rec = state.srs[card.fr] || { box: 0, due: Date.now() };
+  const key = srsKey(card);
+  const rec = state.srs[key] || { box: 0, due: Date.now() };
   let box = rec.box, days;
   if (grade === "again") { box = 1; days = 0; }
   else if (grade === "hard") { box = Math.max(1, box); days = 1; }
   else if (grade === "good") { box = Math.min(5, box + 1); days = BOX_INTERVAL_DAYS[box]; }
   else if (grade === "easy") { box = Math.min(5, box + 2); days = Math.round(BOX_INTERVAL_DAYS[box] * 1.3) || 2; }
-  state.srs[card.fr] = { box, due: Date.now() + days * 86400000 };
+  state.srs[key] = { box, due: Date.now() + days * 86400000 };
   if (grade === "good" || grade === "easy") studySession.correct++;
   touchActivity();
+}
+
+/* ================= LESSONS (43-lesson curriculum) ================= */
+function renderLessonsList() {
+  const byLevel = { A1: LESSONS_DATA.filter((l) => l.level === "A1"), A2: LESSONS_DATA.filter((l) => l.level === "A2"), B1: LESSONS_DATA.filter((l) => l.level === "B1"), B2: LESSONS_DATA.filter((l) => l.level === "B2") };
+  setApp(`
+    <p class="muted">Un parcours guidé de ${LESSONS_DATA.length} leçons (français ↔ persan), du tout débutant (A1) au niveau avancé (B2). Chaque leçon inclut le vocabulaire, des phrases types et les erreurs fréquentes à éviter. Les leçons marquées ▶️ ont un lien vidéo YouTube confirmé.</p>
+    ${["A1", "A2", "B1", "B2"].map((lvl) => `
+      <div class="section-title">Niveau ${lvl}</div>
+      ${byLevel[lvl].map((l) => {
+        const s = state.lessonScores[l.id];
+        return `<a class="list-row" href="#/lessons/${l.id}">
+          <div><span class="pill ${l.level.toLowerCase()}">${l.id}</span>${l.videoId ? `<span title="Vidéo disponible">▶️</span> ` : ""}${escapeHtml(l.title)}</div>
+          <div class="rt">${s ? `<span class="pill done">${s.correct}/${s.total}</span>` : l.vocab.length + " mots"}</div>
+        </a>`;
+      }).join("")}
+    `).join("")}
+  `);
+}
+function buildLessonQuiz(lesson) {
+  return (lesson.errors || []).map((e) => {
+    const opts = shuffle([e.right, e.wrong]);
+    return { q: "Quelle phrase est correcte ?", options: opts, answerIndex: opts.indexOf(e.right), explanation: e.note || "" };
+  });
+}
+function renderLessonDetail(idStr) {
+  const lesson = LESSONS_DATA.find((l) => l.id === Number(idStr));
+  if (!lesson) { setApp(`<div class="empty-state">Leçon introuvable.</div>`); return; }
+  const idx = LESSONS_DATA.findIndex((l) => l.id === lesson.id);
+  const prev = LESSONS_DATA[idx - 1];
+  const next = LESSONS_DATA[idx + 1];
+  touchActivity();
+  setApp(`
+    <div class="card">
+      <span class="pill ${lesson.level.toLowerCase()}">Leçon ${lesson.id} · ${lesson.level}</span>
+      <h2>${escapeHtml(lesson.title)}</h2>
+      <div class="fa mb8" style="text-align:left;">${escapeHtml(lesson.topic)}</div>
+      <p class="muted">${escapeHtml(lesson.objective)}</p>
+      <button class="btn mt8" id="reviseBtn">🗂️ Réviser ce vocabulaire (${lesson.vocab.length} mots)</button>
+      ${lesson.videoId ? `
+        <div class="btn-row mt8">
+          <button class="btn secondary" id="listenBtn" style="background:#c4302b;color:#fff;border-color:#c4302b;">🔊 Écouter en lisant</button>
+          <a class="btn secondary" style="text-decoration:none;" target="_blank" rel="noopener" href="https://www.youtube.com/watch?v=${lesson.videoId}">▶ Ouvrir sur YouTube</a>
+        </div>
+        <div id="audioPlayerWrap" hidden></div>
+      ` : `
+        <a class="btn secondary mt8" style="text-decoration:none;" target="_blank" rel="noopener" href="https://www.youtube.com/results?search_query=${encodeURIComponent(lesson.topic)}">🔎 Chercher la vidéo sur YouTube</a>
+        <p class="muted" style="font-size:11.5px;margin:6px 0 0;">Lien direct pas encore confirmé pour cette leçon — ce bouton ouvre une recherche YouTube avec le titre persan de la leçon.</p>
+      `}
+    </div>
+
+    ${lesson.text ? `
+      <div class="section-title">Texte complet de la leçon</div>
+      <div class="card">
+        <div class="passage-text">${escapeHtml(lesson.text)}</div>
+      </div>
+    ` : ""}
+
+    <div class="section-title">Vocabulaire</div>
+    <div class="card">
+      ${lesson.vocab.map((v) => `
+        <div class="list-row" style="margin-bottom:8px;">
+          <div><b>${escapeHtml(v.fr)}</b>${v.en ? `<div class="muted" style="font-size:12.5px;">${escapeHtml(v.en)}</div>` : ""}</div>
+          ${v.fa ? `<div class="fa rt">${escapeHtml(v.fa)}</div>` : ""}
+        </div>
+      `).join("")}
+    </div>
+
+    <div class="section-title">Phrases types</div>
+    <div class="card">
+      <ul>${lesson.examples.map((ex) => `<li class="mb8">${escapeHtml(ex)}</li>`).join("")}</ul>
+    </div>
+
+    ${lesson.errors && lesson.errors.length ? `
+      <div class="section-title">Erreurs fréquentes</div>
+      <div class="card">
+        ${lesson.errors.map((e) => `
+          <div class="mb12">
+            <div class="err-wrong">✗ ${escapeHtml(e.wrong)}</div>
+            <div class="err-right">✓ ${escapeHtml(e.right)}</div>
+            ${e.note ? `<div class="muted" style="font-size:12.5px;">${escapeHtml(e.note)}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+
+      <div class="section-title">Mini quiz</div>
+      <div class="card" id="quizScoreCard" hidden><div class="score-banner"><div>Résultat</div><div class="big" id="quizScoreText"></div></div></div>
+      <div id="quizContainer">${quizHTML(buildLessonQuiz(lesson))}</div>
+    ` : ""}
+
+    <div class="btn-row mt16">
+      ${prev ? `<a class="btn secondary" href="#/lessons/${prev.id}" style="text-decoration:none;display:flex;align-items:center;justify-content:center;">← Leçon ${prev.id}</a>` : `<span></span>`}
+      ${next ? `<a class="btn secondary" href="#/lessons/${next.id}" style="text-decoration:none;display:flex;align-items:center;justify-content:center;">Leçon ${next.id} →</a>` : `<span></span>`}
+    </div>
+  `);
+  $("#reviseBtn").onclick = () => startLessonStudy(lesson.id);
+  const listenBtn = $("#listenBtn");
+  if (listenBtn) {
+    listenBtn.onclick = () => {
+      const wrap = $("#audioPlayerWrap");
+      if (wrap.hidden) {
+        wrap.innerHTML = `<iframe class="lesson-player" src="https://www.youtube.com/embed/${lesson.videoId}?autoplay=1&rel=0" title="Vidéo de la leçon" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+        wrap.hidden = false;
+        listenBtn.textContent = "⏹️ Arrêter";
+      } else {
+        wrap.innerHTML = "";
+        wrap.hidden = true;
+        listenBtn.textContent = "🔊 Écouter en lisant";
+      }
+    };
+  }
+  if (lesson.errors && lesson.errors.length) {
+    const quiz = buildLessonQuiz(lesson);
+    attachQuiz($("#quizContainer"), quiz, (score, total) => {
+      state.lessonScores[lesson.id] = { correct: score, total, date: todayStr() };
+      touchActivity();
+      $("#quizScoreCard").hidden = false;
+      $("#quizScoreText").textContent = score + "/" + total;
+      toast("Score enregistré : " + score + "/" + total);
+    });
+  }
 }
 
 /* ================= GRAMMAR ================= */
@@ -758,12 +926,22 @@ function renderProgress() {
       <div class="stat-box"><div class="num">${gAvg}%</div><div class="lbl">moyenne grammaire</div></div>
     </div>
     <div class="card">
-      ${bar("Vocabulaire maîtrisé", mastered, VOCAB_DATA.length)}
+      ${bar("Leçons du cours consultées", Object.keys(state.lessonScores).length, LESSONS_DATA.length)}
+      ${bar("Vocabulaire maîtrisé (TCF)", mastered, VOCAB_DATA.length)}
       ${bar("Points de grammaire testés", gScores.length, GRAMMAR_DATA.length)}
       ${bar("Textes lus", rDone, READING_DATA.length)}
       ${bar("Exercices d'écoute", lDone, LISTENING_DATA.length)}
       ${bar("Sujets d'expression écrite", wDone, WRITING_DATA.length)}
       ${bar("Sujets d'expression orale", sDone, SPEAKING_DATA.length)}
+    </div>
+    <div class="section-title">Sauvegarde</div>
+    <div class="card">
+      <p class="muted" style="margin-top:0;">Votre progression est stockée uniquement dans ce navigateur. Téléchargez une sauvegarde régulièrement pour ne pas la perdre (changement de téléphone, données du site effacées, etc.), et restaurez-la ici quand vous en avez besoin.</p>
+      <div class="btn-row">
+        <button class="btn secondary" id="exportBtn">💾 Télécharger ma sauvegarde</button>
+        <button class="btn secondary" id="importBtn">📥 Restaurer une sauvegarde</button>
+      </div>
+      <input type="file" id="importFile" accept="application/json" hidden>
     </div>
     <button class="btn danger mt16" id="resetBtn">Réinitialiser ma progression</button>
   `);
@@ -776,5 +954,63 @@ function renderProgress() {
       navigate("#/progress");
       renderProgress();
     }
+  };
+  $("#exportBtn").onclick = async () => {
+    const payload = JSON.stringify({ app: "tcf-b2-app", version: 1, exportedAt: new Date().toISOString(), state }, null, 2);
+    const filename = `tcf-b2-sauvegarde-${todayStr()}.json`;
+    const hasClaudeRuntime = typeof window.claude !== "undefined" && typeof window.claude.use === "function";
+    if (hasClaudeRuntime) {
+      // Running inside the claude.ai artifact viewer: browser-style <a download> links
+      // do nothing there, so use the platform's downloads capability instead.
+      try {
+        const downloads = await window.claude.use("downloads");
+        if (downloads) {
+          await downloads.save({ filename, data: payload });
+          toast("Sauvegarde téléchargée.");
+        } else {
+          toast("Téléchargement indisponible dans cet aperçu — utilisez la version sur votre site.");
+        }
+      } catch (e) {
+        toast("Téléchargement refusé ou indisponible ici.");
+      }
+      return;
+    }
+    try {
+      const blob = new Blob([payload], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast("Sauvegarde téléchargée.");
+    } catch (e) {
+      toast("Le téléchargement n'a pas fonctionné dans cet environnement.");
+    }
+  };
+  $("#importBtn").onclick = () => $("#importFile").click();
+  $("#importFile").onchange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const incoming = parsed && parsed.state ? parsed.state : parsed;
+        if (!incoming || typeof incoming !== "object") throw new Error("format invalide");
+        if (!confirm("Remplacer votre progression actuelle par cette sauvegarde ? Cette action est irréversible.")) return;
+        state = Object.assign(defaultState(), incoming);
+        saveState();
+        updateStreakBadge();
+        toast("Progression restaurée depuis la sauvegarde.");
+        navigate("#/progress");
+        renderProgress();
+      } catch (err) {
+        toast("Fichier de sauvegarde invalide.");
+      }
+    };
+    reader.readAsText(file);
   };
 }
